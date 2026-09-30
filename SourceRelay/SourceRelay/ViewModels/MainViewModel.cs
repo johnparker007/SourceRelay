@@ -13,12 +13,11 @@ public sealed class MainViewModel : Bindable, IDisposable
     private readonly ApplyHistoryService _history = new(); private readonly DownloadsMonitor _monitor = new();
     private AppSettings _settings = new(); private ReturnedBundle? _returned; private ChangeItem? _selectedChange;
     private readonly SourceSelectionService _selection = new();
-    private string _projectRoot = "", _status = "Choose a project folder to begin.", _lastBundlePath = "", _search = "", _sourcePath = ""; private bool _busy;
+    private string _status = "Paste an absolute file or folder path to begin.", _lastBundlePath = "", _search = "", _sourcePath = ""; private bool _busy;
     public ObservableCollection<FileNode> ProjectFiles { get; } = []; public ObservableCollection<ChangeItem> Changes { get; } = []; public ObservableCollection<string> Activity { get; } = [];
     public ObservableCollection<SelectedFileItem> SelectedFileItems => _selection.Files;
     public event EventHandler<string>? NavigationRequested;
     public IReadOnlyList<HistoryEntry> History => _history.Entries.Reverse().ToList();
-    public string ProjectRoot { get => _projectRoot; private set => Set(ref _projectRoot, value); }
     public string Status { get => _status; private set => Set(ref _status, value); }
     public string LastBundlePath { get => _lastBundlePath; private set { if (Set(ref _lastBundlePath, value)) Changed(nameof(HasBundle)); } }
     public bool HasBundle => !string.IsNullOrEmpty(LastBundlePath);
@@ -31,42 +30,53 @@ public sealed class MainViewModel : Bindable, IDisposable
     public string SelectedDiff => SelectedChange?.Change.Diff ?? "Select a changed file to view its comparison.";
     public string SelectionSummary { get { var files = SelectedFiles().ToList(); return $"Editable: {files.Count(x => x.Mode == Models.FileMode.Editable)}   Context-only: {files.Count(x => x.Mode == Models.FileMode.Context)}   Size: {files.Sum(x => new FileInfo(x.FullPath).Length):N0} bytes"; } }
 
-    public MainViewModel() { _selection.Changed += (_, _) => { foreach (var root in ProjectFiles) root.RefreshFromSelection(); Changed(nameof(SelectedFilesHeading)); Changed(nameof(SelectionSummary)); }; }
+    public MainViewModel()
+    {
+        _selection.Changed += (_, _) => { foreach (var root in ProjectFiles) root.RefreshFromSelection(); Changed(nameof(SelectedFilesHeading)); Changed(nameof(SelectionSummary)); };
+        _selection.RootsChanged += (_, _) => RebuildRoots();
+    }
 
     public async Task InitializeAsync()
     {
         _settings = await _settingsService.LoadAsync(); await _history.LoadAsync(); Changed(nameof(History));
-        if (Directory.Exists(_settings.LastProjectRoot)) LoadProject(_settings.LastProjectRoot);
-        if (_settings.MonitorDownloads) { _monitor.ZipReady += async path => await Application.Current.Dispatcher.InvokeAsync(async () => { var candidate = await new ReturnedBundleService(_records).ValidateAsync(path); if (candidate.Record.ProjectRoot.Length > 0) { await LoadReturnedAsync(path); AddActivity("Matching returned bundle detected"); } }); _monitor.Start(_settings.DownloadsFolder); }
+        _selection.SetSettings(_settings);
+        IEnumerable<PersistedSourceRoot> persisted = _settings.SourceRoots.Count > 0 ? _settings.SourceRoots : Directory.Exists(_settings.LastProjectRoot) ? new[] { new PersistedSourceRoot { AbsolutePath = _settings.LastProjectRoot } } : [];
+        foreach (var root in persisted.Where(x => Directory.Exists(x.AbsolutePath))) _selection.AddRoot(root.AbsolutePath, string.IsNullOrWhiteSpace(root.DisplayName) ? null : root.DisplayName);
+        if (_settings.MonitorDownloads) { _monitor.ZipReady += async path => await Application.Current.Dispatcher.InvokeAsync(async () => { var candidate = await new ReturnedBundleService(_records).ValidateAsync(path); if (candidate.Record.Manifest.BundleId != Guid.Empty) { await LoadReturnedAsync(path); AddActivity("Matching returned bundle detected"); } }); _monitor.Start(_settings.DownloadsFolder); }
     }
-    public async Task ChooseProjectAsync(string root)
+    public async Task AddSourceRootAsync(string root)
     {
-        LoadProject(root); _settings.LastProjectRoot = root; _settings.RecentProjectRoots.RemoveAll(x => string.Equals(x, root, StringComparison.OrdinalIgnoreCase)); _settings.RecentProjectRoots.Insert(0, root); _settings.RecentProjectRoots = _settings.RecentProjectRoots.Take(10).ToList(); await _settingsService.SaveAsync(_settings);
+        _selection.AddRoot(root); await PersistRootsAsync(); Status = "Source Root added.";
     }
-    private void LoadProject(string root) { ProjectRoot = Path.GetFullPath(root); _selection.Configure(ProjectRoot, _settings); ProjectFiles.Clear(); foreach (var node in new ProjectScanner(_settings, _selection).Scan(ProjectRoot)) ProjectFiles.Add(node); Status = "Select only the files you intend to share."; Changed(nameof(SelectionSummary)); }
+    public Task ChooseProjectAsync(string root) => AddSourceRootAsync(root);
+    private void RebuildRoots() { ProjectFiles.Clear(); foreach (var root in _selection.Roots) ProjectFiles.Add(new ProjectScanner(_settings, _selection).ScanRoot(root)); Changed(nameof(SelectionSummary)); }
+    private async Task PersistRootsAsync() { _settings.SourceRoots = _selection.Roots.Select(x => new PersistedSourceRoot { AbsolutePath = x.AbsolutePath, DisplayName = x.DisplayName }).ToList(); await _settingsService.SaveAsync(_settings); }
     public bool AddSourcePath()
     {
-        if (string.IsNullOrEmpty(ProjectRoot)) { Status = "Choose a project folder first."; return false; }
         var result = _selection.AddPath(SourcePath); Status = result.Message;
-        if (result.NavigationPath is not null) NavigateTo(result.NavigationPath);
-        if (result.Status is AddPathStatus.Added or AddPathStatus.AlreadySelected) { SourcePath = ""; return true; }
+        if (result.NavigationPath is not null) NavigateTo(result.NavigationPath, result.SourceRootId);
+        if (result.Status is AddPathStatus.Added or AddPathStatus.AlreadySelected) { SourcePath = ""; _ = PersistRootsAsync(); return true; }
         return false;
     }
-    public void NavigateTo(string path)
+    public void NavigateTo(string path) => NavigateTo(path, null);
+    private void NavigateTo(string path, string? sourceRootId)
     {
-        if (string.IsNullOrEmpty(ProjectRoot)) return;
-        Search = ""; var relative = Path.GetRelativePath(ProjectRoot, Path.GetFullPath(path));
-        var parts = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); var nodes = ProjectFiles; FileNode? target = null;
+        var owner = sourceRootId is null ? _selection.OwningRoot(path) : _selection.Root(sourceRootId); if (owner is null) return;
+        Search = ""; var relative = Path.GetRelativePath(owner.AbsolutePath, Path.GetFullPath(path));
+        var rootNode = ProjectFiles.FirstOrDefault(x => x.SourceRootId == owner.Id); if (rootNode is null) return; rootNode.IsExpanded = true;
+        var parts = relative == "." ? Array.Empty<string>() : relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); var nodes = rootNode.Children; FileNode? target = rootNode;
         foreach (var part in parts) { target = nodes.FirstOrDefault(x => string.Equals(x.Name, part, StringComparison.OrdinalIgnoreCase)); if (target is null) return; if (target.IsDirectory) { target.IsExpanded = true; nodes = target.Children; } }
         foreach (var root in ProjectFiles) ClearTreeSelection(root); target!.IsSelected = true; NavigationRequested?.Invoke(this, target.FullPath);
     }
-    public void NavigateTo(SelectedFileItem? item) { if (item is not null) NavigateTo(item.FullPath); }
+    public void NavigateTo(SelectedFileItem? item) { if (item is not null) NavigateTo(item.FullPath, item.SourceRootId); }
     public void RemoveSelected(SelectedFileItem? item) { if (item is not null) _selection.Remove(item.FullPath); }
+    public int SelectedCountForRoot(FileNode? node) => node is null ? 0 : SelectedFileItems.Count(x => x.SourceRootId == node.SourceRootId);
+    public async Task RemoveSourceRootAsync(FileNode? node) { if (node is null || !node.IsSourceRoot) return; _selection.RemoveRoot(node.SourceRootId); await PersistRootsAsync(); Status = "Source Root removed from the workspace."; }
     private static void ClearTreeSelection(FileNode node) { node.IsSelected = false; foreach (var child in node.Children) ClearTreeSelection(child); }
     public async Task GenerateAsync()
     {
         if (IsBusy) return; IsBusy = true;
-        try { var result = await new BundleService(_records).CreateAsync(ProjectRoot, SelectedFiles(), _settings.BundleOutputFolder); LastBundlePath = result.ZipPath; Clipboard.SetText(BundleService.Handoff); Status = "Bundle created. Chat handoff message copied to clipboard."; AddActivity($"Bundle generated — {result.Record.Manifest.BundleId.ToString()[..8]}"); }
+        try { var roots = _selection.Roots.Select(x => new BundleSourceRoot(x.Id, x.AbsolutePath, x.DisplayName)); var result = await new BundleService(_records).CreateAsync(roots, SelectedFiles(), _settings.BundleOutputFolder); LastBundlePath = result.ZipPath; Clipboard.SetText(BundleService.Handoff); Status = "Bundle created. Chat handoff message copied to clipboard."; AddActivity($"Bundle generated — {result.Record.Manifest.BundleId.ToString()[..8]}"); }
         catch (Exception ex) { Status = "Bundle generation failed: " + ex.Message; } finally { IsBusy = false; }
     }
     public async Task LoadReturnedAsync(string path)

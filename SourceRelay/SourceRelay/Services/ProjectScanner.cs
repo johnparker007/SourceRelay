@@ -7,7 +7,12 @@ namespace SourceRelay.Services;
 public sealed class ProjectScanner(AppSettings settings, SourceSelectionService? selection = null)
 {
     private static readonly string[] SensitiveExtensions = [".pfx", ".p12", ".pem", ".key", ".cer", ".crt", ".jks", ".keystore"];
-    public IEnumerable<FileNode> Scan(string root) => Children(new FileNode { FullPath = root, RelativePath = "", IsDirectory = true, Selection = selection });
+    public FileNode ScanRoot(SourceRoot root)
+    {
+        var node = new FileNode { Name = root.DisplayName, FullPath = root.AbsolutePath, RelativePath = "", SourceRootId = root.Id, SourceRootPath = root.AbsolutePath, IsSourceRoot = true, IsDirectory = true, Selection = selection, Loader = Children };
+        node.Children.Add(new FileNode { Name = "Loading…", FullPath = root.AbsolutePath, RelativePath = "" }); return node;
+    }
+    public IEnumerable<FileNode> Scan(string root) => Children(new FileNode { FullPath = root, SourceRootPath = root, RelativePath = "", IsDirectory = true, Selection = selection });
     private IEnumerable<FileNode> Children(FileNode parent)
     {
         IEnumerable<string> paths;
@@ -18,13 +23,12 @@ public sealed class ProjectScanner(AppSettings settings, SourceSelectionService?
             var directory = Directory.Exists(path); var name = Path.GetFileName(path);
             if (directory && settings.ExcludedDirectories.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
             if (!directory && IsExcludedFile(name)) continue;
-            var relative = Path.GetRelativePath(Root(parent), path).Replace('\\', '/');
-            var node = new FileNode { Name = name, FullPath = path, RelativePath = relative, IsDirectory = directory, Loader = Children, Parent = parent, Selection = selection };
+            var relative = Path.GetRelativePath(parent.SourceRootPath, path).Replace('\\', '/');
+            var node = new FileNode { Name = name, FullPath = path, RelativePath = relative, SourceRootId = parent.SourceRootId, SourceRootPath = parent.SourceRootPath, IsDirectory = directory, Loader = Children, Parent = parent, Selection = selection };
             if (directory) node.Children.Add(new FileNode { Name = "Loading…", FullPath = path, RelativePath = relative });
             yield return node;
         }
     }
-    private static string Root(FileNode node) { var path = node.FullPath; var relative = node.RelativePath.Replace('/', Path.DirectorySeparatorChar); return relative.Length == 0 ? path : path[..^(relative.Length + 1)]; }
     private static bool IsExcludedFile(string name)
     {
         var lower = name.ToLowerInvariant(); var extension = Path.GetExtension(lower);
