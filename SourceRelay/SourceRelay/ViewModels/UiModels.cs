@@ -32,10 +32,10 @@ public sealed class FileNode : Bindable
     public bool IsSelected { get => _selected; set => Set(ref _selected, value); }
     public bool IsExpanded { get => _expanded; set { if (Set(ref _expanded, value) && value) LoadChildren(); } }
     public Func<FileNode, IEnumerable<FileNode>>? Loader { get; init; }
-    public void LoadChildren() { if (_loaded || !IsDirectory) return; _loaded = true; Children.Clear(); foreach (var child in Loader?.Invoke(this) ?? []) Children.Add(child); Recalculate(); }
+    public void LoadChildren() { if (_loaded || !IsDirectory) return; _loaded = true; Children.Clear(); foreach (var child in Loader?.Invoke(this) ?? Enumerable.Empty<FileNode>()) Children.Add(child); Recalculate(); }
     public IEnumerable<FileNode> Descendants() { LoadChildren(); foreach (var child in Children) { yield return child; if (child.IsDirectory) foreach (var nested in child.Descendants()) yield return nested; } }
     public void RefreshFromSelection() { if (!IsDirectory) { Changed(nameof(Included)); Changed(nameof(Mode)); } else { foreach (var child in Children) child.RefreshFromSelection(); Recalculate(); } }
-    private void Recalculate() { if (!IsDirectory || Children.Count == 0) return; var states = Children.Select(x => x.Included).ToList(); var next = states.All(x => x == true) ? true : states.All(x => x == false) ? false : null; Set(ref _included, next, nameof(Included)); Parent?.Recalculate(); }
+    private void Recalculate() { if (!IsDirectory || Children.Count == 0) return; var states = Children.Select(x => x.Included).ToList(); bool? next = states.All(x => x == true) ? true : states.All(x => x == false) ? false : null; Set(ref _included, next, nameof(Included)); Parent?.Recalculate(); }
 }
 
 public sealed class ChangeItem : Bindable
