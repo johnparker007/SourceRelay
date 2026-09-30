@@ -1,5 +1,7 @@
 ﻿using System.Windows;
 using Microsoft.Win32;
+using System.Windows.Controls;
+using System.Windows.Input;
 using SourceRelay.ViewModels;
 
 namespace SourceRelay
@@ -14,6 +16,7 @@ namespace SourceRelay
         {
             InitializeComponent();
             DataContext = _viewModel;
+            _viewModel.NavigationRequested += (_, path) => Dispatcher.BeginInvoke(() => BringPathIntoView(ProjectTree, path));
             Loaded += async (_, _) => await _viewModel.InitializeAsync();
             Closed += (_, _) => _viewModel.Dispose();
         }
@@ -29,5 +32,25 @@ namespace SourceRelay
         private async void Window_Drop(object sender, DragEventArgs e) { if (e.Data.GetData(DataFormats.FileDrop) is string[] files && files.Length == 1) await _viewModel.LoadReturnedAsync(files[0]); }
         private void Window_DragOver(object sender, DragEventArgs e) { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; }
         private void SelectionChanged(object sender, RoutedEventArgs e) => _viewModel.RefreshSelection();
+        private void AddSourcePath_Click(object sender, RoutedEventArgs e) { if (_viewModel.AddSourcePath()) SourcePathBox.Focus(); }
+        private void SourcePath_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter) { e.Handled = true; _viewModel.AddSourcePath(); SourcePathBox.Focus(); }
+            else if (e.Key == Key.Escape) { _viewModel.SourcePath = ""; e.Handled = true; }
+        }
+        private void SelectedFile_SelectionChanged(object sender, SelectionChangedEventArgs e) => _viewModel.NavigateTo((sender as ListBox)?.SelectedItem as SelectedFileItem);
+        private void RemoveSelected_Click(object sender, RoutedEventArgs e) { if ((sender as Button)?.Tag is SelectedFileItem item) _viewModel.RemoveSelected(item); e.Handled = true; }
+
+        private static bool BringPathIntoView(ItemsControl parent, string path)
+        {
+            parent.UpdateLayout();
+            foreach (var item in parent.Items.OfType<FileNode>())
+            {
+                if (parent.ItemContainerGenerator.ContainerFromItem(item) is not TreeViewItem container) continue;
+                if (string.Equals(item.FullPath, path, StringComparison.OrdinalIgnoreCase)) { container.IsSelected = true; container.BringIntoView(); container.Focus(); return true; }
+                if (item.IsDirectory && BringPathIntoView(container, path)) return true;
+            }
+            return false;
+        }
     }
 }
