@@ -53,7 +53,7 @@
                     <DataGrid Grid.Row="1" ItemsSource="{Binding Changes}" SelectedItem="{Binding SelectedChange}" AutoGenerateColumns="False" IsReadOnly="False" Margin="3" CanUserAddRows="False">
                         <DataGrid.Columns><DataGridCheckBoxColumn Header="Apply" Binding="{Binding Apply}"/><DataGridTextColumn Header="Path" Binding="{Binding Path}" Width="*" IsReadOnly="True"/><DataGridTextColumn Header="Classification" Binding="{Binding Classification}" Width="150" IsReadOnly="True"/><DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="2*" IsReadOnly="True"/></DataGrid.Columns>
                     </DataGrid>
-                    <TextBox Grid.Row="2" Text="{Binding SelectedDiff}" FontFamily="Consolas" FontSize="12" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Margin="3"/>
+                    <TextBox Grid.Row="2" Text="{Binding SelectedDiff, Mode=OneWay}" FontFamily="Consolas" FontSize="12" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Margin="3"/>
                     <Button Grid.Row="3" Content="Apply Selected" Click="Apply_Click" HorizontalAlignment="Right" FontWeight="SemiBold"/>
                 </Grid>
             </GroupBox>
