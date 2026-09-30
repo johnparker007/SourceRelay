@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace SourceRelay.Services;
 
 public sealed class DownloadsMonitor : IDisposable
