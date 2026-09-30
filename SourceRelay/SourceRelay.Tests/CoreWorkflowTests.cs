@@ -27,6 +27,23 @@ public sealed class CoreWorkflowTests : IDisposable
     {
         var path = Write("Assets/Scripts/a.cs", "old"); var result = await new BundleService(_records).CreateAsync(_project, [new(path, "Assets/Scripts/a.cs", FileMode.Editable)], Path.Combine(_temp, "out"));
         using var zip = ZipFile.OpenRead(result.ZipPath); Assert.Contains(zip.Entries, x => x.FullName == "INSTRUCTIONS.md"); Assert.Contains(zip.Entries, x => x.FullName == "manifest.json"); Assert.Contains(zip.Entries, x => x.FullName == "files/Assets/Scripts/a.cs"); Assert.Equal(FileMode.Editable, result.Record.Manifest.Files[0].Mode); Assert.DoesNotContain(_project, Read(zip, "manifest.json"));
+        var instructions = Read(zip, "INSTRUCTIONS.md");
+        Assert.Contains("complete `files/` tree", instructions); Assert.Contains("even if you did not modify it", instructions); Assert.Contains("must be returned byte-for-byte unchanged", instructions); Assert.Contains("Do not include `INSTRUCTIONS.md`", instructions);
+    }
+
+    [Theory]
+    [InlineData(FileMode.Editable)]
+    [InlineData(FileMode.Context)]
+    public async Task MissingOriginalFileMakesReturnInvalid(FileMode mode)
+    {
+        var (_, zip) = await CreateAsync(mode); Remove(zip, "files/a.cs"); var result = await new ReturnedBundleService(_records).ValidateAsync(zip);
+        Assert.False(result.IsValid); Assert.Contains(result.Changes, x => x.Path == "a.cs" && x.Kind == ChangeKind.Missing);
+    }
+
+    [Fact] public async Task CompleteUnchangedContextReturnWithoutInstructionsIsValid()
+    {
+        var (_, zip) = await CreateAsync(FileMode.Context); Remove(zip, "INSTRUCTIONS.md"); var result = await new ReturnedBundleService(_records).ValidateAsync(zip);
+        Assert.True(result.IsValid); Assert.Equal(ChangeKind.Unchanged, Assert.Single(result.Changes).Kind);
     }
 
     [Fact] public async Task RecognisesReturnedModificationAndLocalConflict()
@@ -69,6 +86,7 @@ public sealed class CoreWorkflowTests : IDisposable
     private static string Read(ZipArchive z, string name) { using var r = new StreamReader(z.GetEntry(name)!.Open()); return r.ReadToEnd(); }
     private static void Rewrite(string path, string entry, string content) { using var z = ZipFile.Open(path, ZipArchiveMode.Update); z.GetEntry(entry)!.Delete(); AddEntry(z, entry, content); }
     private static void Add(string path, string entry, string content) { using var z = ZipFile.Open(path, ZipArchiveMode.Update); AddEntry(z, entry, content); }
+    private static void Remove(string path, string entry) { using var z = ZipFile.Open(path, ZipArchiveMode.Update); z.GetEntry(entry)!.Delete(); }
     private static void AddEntry(ZipArchive z, string name, string text) { using var w = new StreamWriter(z.CreateEntry(name).Open()); w.Write(text); }
     private static void MakeZip(string path, BundleManifest manifest, params (string, string)[] files) { using var z = ZipFile.Open(path, ZipArchiveMode.Create); AddEntry(z, "manifest.json", JsonSerializer.Serialize(manifest, JsonStore.Options)); foreach (var f in files) AddEntry(z, f.Item1, f.Item2); }
 }

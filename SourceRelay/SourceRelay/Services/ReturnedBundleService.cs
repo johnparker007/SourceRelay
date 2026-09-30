@@ -1,5 +1,6 @@
 using System.IO;
 using System.IO.Compression;
+using System.Text;
 using System.Text.Json;
 using SourceRelay.Models;
 
@@ -25,19 +26,22 @@ public sealed class ReturnedBundleService(BundleRecordStore records)
             }
             var manifests = zip.Entries.Where(x => string.Equals(x.FullName.Replace('\\', '/'), "manifest.json", StringComparison.OrdinalIgnoreCase)).ToList();
             if (manifests.Count != 1) return Error(result, "A single manifest.json is required.");
-            BundleManifest manifest;
-            await using (var stream = manifests[0].Open()) manifest = await JsonSerializer.DeserializeAsync<BundleManifest>(stream, JsonStore.Options, ct) ?? throw new InvalidDataException("Manifest is empty.");
+            var manifestBytes = await ReadLimitedAsync(manifests[0], ct);
+            var manifest = JsonSerializer.Deserialize<BundleManifest>(manifestBytes, JsonStore.Options) ?? throw new InvalidDataException("Manifest is empty.");
             if (manifest.Format != "SourceRelay" || manifest.FormatVersion != 1 || manifest.BundleId == Guid.Empty) return Error(result, "Unsupported SourceRelay manifest.");
             result.BundleId = manifest.BundleId;
             result.Record = await records.FindAsync(manifest.BundleId) ?? new();
             if (string.IsNullOrEmpty(result.Record.ProjectRoot)) return Error(result, "Bundle ID is not recognised on this computer.");
             if (!ManifestMatches(manifest, result.Record.Manifest)) return Error(result, "Returned manifest does not match the original bundle.");
+            var originalManifestBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(result.Record.Manifest, JsonStore.Options));
+            if (!manifestBytes.SequenceEqual(originalManifestBytes)) return Error(result, "Returned manifest.json is not byte-for-byte unchanged.");
             var expected = result.Record.Manifest.Files.ToDictionary(x => x.Path, StringComparer.OrdinalIgnoreCase);
             var returnedEntries = zip.Entries.Where(x => x.FullName.Replace('\\', '/').StartsWith("files/", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(x.Name)).ToList();
             foreach (var entry in returnedEntries)
             {
                 var relative = SafePath.NormalizeRelative(entry.FullName.Replace('\\', '/')[6..]);
                 if (!expected.TryGetValue(relative, out var original)) { result.Changes.Add(new() { Path = relative, Kind = ChangeKind.Unexpected, Message = "File was not in the original bundle." }); continue; }
+                if (!string.Equals(relative, original.Path, StringComparison.Ordinal)) { result.Changes.Add(new() { Path = relative, Kind = ChangeKind.Unexpected, Message = "File path casing does not match the original bundle." }); continue; }
                 var bytes = await ReadLimitedAsync(entry, ct);
                 var returnedHash = HashService.Bytes(bytes);
                 var localPath = SafePath.UnderRoot(result.Record.ProjectRoot, relative);
@@ -48,9 +52,9 @@ public sealed class ReturnedBundleService(BundleRecordStore records)
                     : localHash != original.Sha256 ? ChangeKind.LocalFileChanged : ChangeKind.Modified;
                 result.Changes.Add(new() { Path = original.Path, Kind = kind, ReturnedBytes = bytes, Apply = kind == ChangeKind.Modified, Diff = DiffService.Create(localBytes, bytes), Message = Describe(kind) });
             }
-            foreach (var missing in expected.Values.Where(x => !returnedEntries.Any(e => string.Equals(e.FullName.Replace('\\', '/'), "files/" + x.Path, StringComparison.OrdinalIgnoreCase))))
+            foreach (var missing in expected.Values.Where(x => !returnedEntries.Any(e => string.Equals(e.FullName.Replace('\\', '/'), "files/" + x.Path, StringComparison.Ordinal))))
                 result.Changes.Add(new() { Path = missing.Path, Kind = ChangeKind.Missing, Message = "File is missing from the returned bundle." });
-            if (result.Changes.Any(x => x.Kind is ChangeKind.Unexpected or ChangeKind.ContextOnlyModified)) result.Errors.Add("Returned bundle contains prohibited changes.");
+            if (result.Changes.Any(x => x.Kind is ChangeKind.Unexpected or ChangeKind.ContextOnlyModified or ChangeKind.Missing)) result.Errors.Add("Returned bundle contains prohibited or missing files.");
             result.Record.State = BundleState.Reviewed;
             await records.SaveAsync(result.Record);
         }

@@ -59,20 +59,32 @@ public sealed class BundleService(BundleRecordStore records)
     public const string Handoff = "Apply the changes we agreed above to the attached SourceRelay bundle. Follow INSTRUCTIONS.md for the bundle and return format.";
     public const string Instructions =
         "# SourceRelay Bundle Instructions\n\n" +
-        "This archive was created by SourceRelay. The user's conversation describes the coding task; " +
-        "these instructions describe the bundle protocol.\n\n" +
-        "## Files\n" +
-        "Files are under `files/`. The manifest marks each file `editable` or `context`. " +
-        "Modify only editable files; context files are reference-only.\n\n" +
-        "## Rules\n" +
-        "1. Do not rename or move files.\n" +
-        "2. Do not modify context-only files.\n" +
-        "3. Do not create additional source files.\n" +
-        "4. Preserve relative paths exactly.\n" +
-        "5. Do not modify `manifest.json`.\n" +
-        "6. If another file is required, ask the user to provide it.\n" +
-        "7. Return a ZIP containing the original `manifest.json` and the `files/` tree only.\n\n" +
-        "The returned archive must preserve the SourceRelay bundle ID and file paths.\n";
+        "This archive was created by SourceRelay.\n\n" +
+        "The user's conversation describes the coding task. These instructions describe how this archive must be handled.\n\n" +
+        "## Files\n\n" +
+        "Files are under `files/`.\n\n" +
+        "The manifest records each file as either:\n\n" +
+        "- `editable`\n" +
+        "- `context`\n\n" +
+        "Only files whose manifest entry has `\"mode\": \"editable\"` may be modified.\n\n" +
+        "Files whose manifest entry has `\"mode\": \"context\"` are reference-only and must be returned byte-for-byte unchanged.\n\n" +
+        "## Rules\n\n" +
+        "1. Do not rename files.\n" +
+        "2. Do not move files.\n" +
+        "3. Do not modify context-only files.\n" +
+        "4. Do not create additional source files.\n" +
+        "5. Preserve all relative paths exactly.\n" +
+        "6. Do not modify `manifest.json`.\n" +
+        "7. If the requested change requires another source file that is not in the bundle, ask the user to provide it rather than inventing its contents.\n" +
+        "8. Do not remove any files from the bundle.\n\n" +
+        "## Return format\n\n" +
+        "When finished, return a ZIP containing:\n\n" +
+        "- the original `manifest.json`, unchanged\n" +
+        "- the complete `files/` tree from the original bundle\n\n" +
+        "Include every original bundled file in the returned ZIP, even if you did not modify it.\n\n" +
+        "Do not add, remove, rename, or move files.\n\n" +
+        "Do not include `INSTRUCTIONS.md` in the returned ZIP.\n\n" +
+        "The returned archive must preserve the original SourceRelay bundle ID and all relative file paths so SourceRelay can validate it.\n";
 
     public async Task<BundleResult> CreateAsync(string projectRoot, IEnumerable<SelectedFile> selection, string outputFolder, CancellationToken ct = default)
     {
