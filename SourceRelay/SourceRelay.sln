@@ -5,6 +5,8 @@ VisualStudioVersion = 17.14.37216.2 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SourceRelay", "SourceRelay\SourceRelay.csproj", "{A4F9055A-E7A3-44FA-AD94-10FF17E2EA14}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SourceRelay.Tests", "SourceRelay.Tests\SourceRelay.Tests.csproj", "{AE630221-C208-4DE1-9299-E93DF027643F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,10 @@ Global
 		{A4F9055A-E7A3-44FA-AD94-10FF17E2EA14}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A4F9055A-E7A3-44FA-AD94-10FF17E2EA14}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A4F9055A-E7A3-44FA-AD94-10FF17E2EA14}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AE630221-C208-4DE1-9299-E93DF027643F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AE630221-C208-4DE1-9299-E93DF027643F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AE630221-C208-4DE1-9299-E93DF027643F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AE630221-C208-4DE1-9299-E93DF027643F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
