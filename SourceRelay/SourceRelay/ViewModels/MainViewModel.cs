@@ -12,8 +12,11 @@ public sealed class MainViewModel : Bindable, IDisposable
     private readonly SettingsService _settingsService = new(); private readonly BundleRecordStore _records = new();
     private readonly ApplyHistoryService _history = new(); private readonly DownloadsMonitor _monitor = new();
     private AppSettings _settings = new(); private ReturnedBundle? _returned; private ChangeItem? _selectedChange;
-    private string _projectRoot = "", _status = "Choose a project folder to begin.", _lastBundlePath = "", _search = ""; private bool _busy;
+    private readonly SourceSelectionService _selection = new();
+    private string _projectRoot = "", _status = "Choose a project folder to begin.", _lastBundlePath = "", _search = "", _sourcePath = ""; private bool _busy;
     public ObservableCollection<FileNode> ProjectFiles { get; } = []; public ObservableCollection<ChangeItem> Changes { get; } = []; public ObservableCollection<string> Activity { get; } = [];
+    public ObservableCollection<SelectedFileItem> SelectedFileItems => _selection.Files;
+    public event EventHandler<string>? NavigationRequested;
     public IReadOnlyList<HistoryEntry> History => _history.Entries.Reverse().ToList();
     public string ProjectRoot { get => _projectRoot; private set => Set(ref _projectRoot, value); }
     public string Status { get => _status; private set => Set(ref _status, value); }
@@ -22,9 +25,13 @@ public sealed class MainViewModel : Bindable, IDisposable
     public bool HasReturn => _returned is not null;
     public bool IsBusy { get => _busy; private set => Set(ref _busy, value); }
     public string Search { get => _search; set { if (Set(ref _search, value)) ApplySearch(); } }
+    public string SourcePath { get => _sourcePath; set => Set(ref _sourcePath, value); }
+    public string SelectedFilesHeading => $"Selected files ({SelectedFileItems.Count})";
     public ChangeItem? SelectedChange { get => _selectedChange; set { if (Set(ref _selectedChange, value)) Changed(nameof(SelectedDiff)); } }
     public string SelectedDiff => SelectedChange?.Change.Diff ?? "Select a changed file to view its comparison.";
     public string SelectionSummary { get { var files = SelectedFiles().ToList(); return $"Editable: {files.Count(x => x.Mode == Models.FileMode.Editable)}   Context-only: {files.Count(x => x.Mode == Models.FileMode.Context)}   Size: {files.Sum(x => new FileInfo(x.FullPath).Length):N0} bytes"; } }
+
+    public MainViewModel() { _selection.Changed += (_, _) => { foreach (var root in ProjectFiles) root.RefreshFromSelection(); Changed(nameof(SelectedFilesHeading)); Changed(nameof(SelectionSummary)); }; }
 
     public async Task InitializeAsync()
     {
@@ -36,7 +43,26 @@ public sealed class MainViewModel : Bindable, IDisposable
     {
         LoadProject(root); _settings.LastProjectRoot = root; _settings.RecentProjectRoots.RemoveAll(x => string.Equals(x, root, StringComparison.OrdinalIgnoreCase)); _settings.RecentProjectRoots.Insert(0, root); _settings.RecentProjectRoots = _settings.RecentProjectRoots.Take(10).ToList(); await _settingsService.SaveAsync(_settings);
     }
-    private void LoadProject(string root) { ProjectRoot = Path.GetFullPath(root); ProjectFiles.Clear(); foreach (var node in new ProjectScanner(_settings).Scan(ProjectRoot)) ProjectFiles.Add(node); Status = "Select only the files you intend to share."; Changed(nameof(SelectionSummary)); }
+    private void LoadProject(string root) { ProjectRoot = Path.GetFullPath(root); _selection.Configure(ProjectRoot, _settings); ProjectFiles.Clear(); foreach (var node in new ProjectScanner(_settings, _selection).Scan(ProjectRoot)) ProjectFiles.Add(node); Status = "Select only the files you intend to share."; Changed(nameof(SelectionSummary)); }
+    public bool AddSourcePath()
+    {
+        if (string.IsNullOrEmpty(ProjectRoot)) { Status = "Choose a project folder first."; return false; }
+        var result = _selection.AddPath(SourcePath); Status = result.Message;
+        if (result.NavigationPath is not null) NavigateTo(result.NavigationPath);
+        if (result.Status is AddPathStatus.Added or AddPathStatus.AlreadySelected) { SourcePath = ""; return true; }
+        return false;
+    }
+    public void NavigateTo(string path)
+    {
+        if (string.IsNullOrEmpty(ProjectRoot)) return;
+        Search = ""; var relative = Path.GetRelativePath(ProjectRoot, Path.GetFullPath(path));
+        var parts = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); var nodes = ProjectFiles; FileNode? target = null;
+        foreach (var part in parts) { target = nodes.FirstOrDefault(x => string.Equals(x.Name, part, StringComparison.OrdinalIgnoreCase)); if (target is null) return; if (target.IsDirectory) { target.IsExpanded = true; nodes = target.Children; } }
+        foreach (var root in ProjectFiles) ClearTreeSelection(root); target!.IsSelected = true; NavigationRequested?.Invoke(this, target.FullPath);
+    }
+    public void NavigateTo(SelectedFileItem? item) { if (item is not null) NavigateTo(item.FullPath); }
+    public void RemoveSelected(SelectedFileItem? item) { if (item is not null) _selection.Remove(item.FullPath); }
+    private static void ClearTreeSelection(FileNode node) { node.IsSelected = false; foreach (var child in node.Children) ClearTreeSelection(child); }
     public async Task GenerateAsync()
     {
         if (IsBusy) return; IsBusy = true;
@@ -58,7 +84,7 @@ public sealed class MainViewModel : Bindable, IDisposable
     public void Dismiss() { _returned = null; Changes.Clear(); Changed(nameof(HasReturn)); Status = "Returned bundle dismissed."; }
     public void OpenOutputFolder() { if (File.Exists(LastBundlePath)) Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LastBundlePath}\"") { UseShellExecute = true }); }
     public void RefreshSelection() => Changed(nameof(SelectionSummary));
-    private IEnumerable<SelectedFile> SelectedFiles() => ProjectFiles.SelectMany(Flatten).Where(x => !x.IsDirectory && x.Included == true).Select(x => new SelectedFile(x.FullPath, x.RelativePath, x.Mode));
+    private IEnumerable<SelectedFile> SelectedFiles() => _selection.Snapshot();
     private static IEnumerable<FileNode> Flatten(FileNode node) { yield return node; if (node.IsDirectory) { if (node.Included == true) node.LoadChildren(); foreach (var child in node.Children) foreach (var nested in Flatten(child)) yield return nested; } }
     private void ApplySearch() { if (string.IsNullOrWhiteSpace(Search)) { Status = "Select only the files you intend to share."; return; } var count = ProjectFiles.SelectMany(Flatten).Count(x => !x.IsDirectory && x.RelativePath.Contains(Search, StringComparison.OrdinalIgnoreCase)); Status = $"{count} file(s) match ‘{Search}’. Expand folders to inspect matches."; }
     private void AddActivity(string text) { Activity.Insert(0, $"{DateTime.Now:t}  {text}"); }

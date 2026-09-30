@@ -20,14 +20,22 @@
         <Border DockPanel.Dock="Bottom" Background="#E1E8EF" Padding="12"><TextBlock Text="{Binding Status}" TextWrapping="Wrap"/></Border>
         <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="2*" MinWidth="330"/><ColumnDefinition Width="3*" MinWidth="440"/><ColumnDefinition Width="1.5*" MinWidth="260"/></Grid.ColumnDefinitions>
-            <GroupBox Header="Project files" Grid.Column="0">
+            <Grid Grid.Column="0">
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="3*"/><RowDefinition Height="2*"/></Grid.RowDefinitions>
+              <GroupBox Header="Add source path" Grid.Row="0">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Content="Add" Click="AddSourcePath_Click"/>
+                  <TextBox x:Name="SourcePathBox" Text="{Binding SourcePath, UpdateSourceTrigger=PropertyChanged}" Padding="7" Margin="3" KeyDown="SourcePath_KeyDown" ToolTip="Paste full file or directory path…"/>
+                </DockPanel>
+              </GroupBox>
+              <GroupBox Header="Project tree" Grid.Row="1">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
                         <Button Content="Choose Project Folder…" Click="ChooseFolder_Click" HorizontalAlignment="Left"/>
                         <TextBlock Text="{Binding ProjectRoot}" Margin="4" TextWrapping="Wrap" Foreground="#445"/>
                         <TextBox Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Margin="4" Padding="7" ToolTip="Search relative paths"/>
                     </StackPanel>
-                    <TreeView ItemsSource="{Binding ProjectFiles}" BorderThickness="0">
+                    <TreeView x:Name="ProjectTree" ItemsSource="{Binding ProjectFiles}" BorderThickness="0">
                         <TreeView.ItemTemplate>
                             <HierarchicalDataTemplate ItemsSource="{Binding Children}">
                                 <DockPanel LastChildFill="True">
@@ -39,10 +47,23 @@
                                 </DockPanel>
                             </HierarchicalDataTemplate>
                         </TreeView.ItemTemplate>
-                        <TreeView.ItemContainerStyle><Style TargetType="TreeViewItem"><Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/></Style></TreeView.ItemContainerStyle>
+                        <TreeView.ItemContainerStyle><Style TargetType="TreeViewItem"><Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/><Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/></Style></TreeView.ItemContainerStyle>
                     </TreeView>
                 </DockPanel>
-            </GroupBox>
+              </GroupBox>
+              <GroupBox Grid.Row="2">
+                <GroupBox.Header><TextBlock Text="{Binding SelectedFilesHeading}"/></GroupBox.Header>
+                <ListBox ItemsSource="{Binding SelectedFileItems}" SelectionChanged="SelectedFile_SelectionChanged" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                  <ListBox.ItemTemplate><DataTemplate>
+                    <Grid Margin="2"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="100"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                      <StackPanel><TextBlock Text="{Binding Name}" FontWeight="SemiBold"/><TextBlock Text="{Binding DirectoryContext}" Foreground="#667" FontSize="11"/></StackPanel>
+                      <ComboBox Grid.Column="1" SelectedValue="{Binding Mode, Mode=TwoWay}" SelectedValuePath="Tag" Margin="3"><ComboBoxItem Content="Editable" Tag="{x:Static models:FileMode.Editable}"/><ComboBoxItem Content="Context" Tag="{x:Static models:FileMode.Context}"/></ComboBox>
+                      <Button Grid.Column="2" Content="×" Padding="8,2" ToolTip="Remove from bundle" Click="RemoveSelected_Click" Tag="{Binding}"/>
+                    </Grid>
+                  </DataTemplate></ListBox.ItemTemplate>
+                </ListBox>
+              </GroupBox>
+            </Grid>
             <GroupBox Header="Bundle and returned changes" Grid.Column="1">
                 <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="2*"/><RowDefinition Height="3*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <StackPanel>
