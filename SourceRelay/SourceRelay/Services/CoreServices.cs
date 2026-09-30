@@ -56,24 +56,22 @@ public sealed record BundleResult(BundleRecord Record, string ZipPath);
 public sealed class BundleService(BundleRecordStore records)
 {
     public const string Handoff = "Apply the changes we agreed above to the attached SourceRelay bundle. Follow INSTRUCTIONS.md for the bundle and return format.";
-    public const string Instructions = """# SourceRelay Bundle Instructions
-
-This archive was created by SourceRelay. The user's conversation describes the coding task; these instructions describe the bundle protocol.
-
-## Files
-Files are under `files/`. The manifest marks each file `editable` or `context`. Modify only editable files; context files are reference-only.
-
-## Rules
-1. Do not rename or move files.
-2. Do not modify context-only files.
-3. Do not create additional source files.
-4. Preserve relative paths exactly.
-5. Do not modify `manifest.json`.
-6. If another file is required, ask the user to provide it.
-7. Return a ZIP containing the original `manifest.json` and the `files/` tree only.
-
-The returned archive must preserve the SourceRelay bundle ID and file paths.
-""";
+    public const string Instructions =
+        "# SourceRelay Bundle Instructions\n\n" +
+        "This archive was created by SourceRelay. The user's conversation describes the coding task; " +
+        "these instructions describe the bundle protocol.\n\n" +
+        "## Files\n" +
+        "Files are under `files/`. The manifest marks each file `editable` or `context`. " +
+        "Modify only editable files; context files are reference-only.\n\n" +
+        "## Rules\n" +
+        "1. Do not rename or move files.\n" +
+        "2. Do not modify context-only files.\n" +
+        "3. Do not create additional source files.\n" +
+        "4. Preserve relative paths exactly.\n" +
+        "5. Do not modify `manifest.json`.\n" +
+        "6. If another file is required, ask the user to provide it.\n" +
+        "7. Return a ZIP containing the original `manifest.json` and the `files/` tree only.\n\n" +
+        "The returned archive must preserve the SourceRelay bundle ID and file paths.\n";
 
     public async Task<BundleResult> CreateAsync(string projectRoot, IEnumerable<SelectedFile> selection, string outputFolder, CancellationToken ct = default)
     {
