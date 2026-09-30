@@ -21,7 +21,14 @@ namespace SourceRelay
             Closed += (_, _) => _viewModel.Dispose();
         }
 
-        private async void ChooseFolder_Click(object sender, RoutedEventArgs e) { var dialog = new OpenFolderDialog { Title = "Choose the project root", Multiselect = false }; if (dialog.ShowDialog(this) == true) await _viewModel.ChooseProjectAsync(dialog.FolderName); }
+        private async void ChooseFolder_Click(object sender, RoutedEventArgs e) { var dialog = new OpenFolderDialog { Title = "Add a Source Root", Multiselect = false }; if (dialog.ShowDialog(this) == true) await _viewModel.AddSourceRootAsync(dialog.FolderName); }
+        private async void RemoveSourceRoot_Click(object sender, RoutedEventArgs e)
+        {
+            if (ProjectTree.SelectedItem is not FileNode node || !node.IsSourceRoot) { MessageBox.Show(this, "Select a top-level Source Root first.", "Remove Source Root"); return; }
+            var count = _viewModel.SelectedCountForRoot(node);
+            if (count > 0 && MessageBox.Show(this, $"Removing this Source Root will also remove {count} selected file(s) from the current bundle selection. Continue?", "Remove Source Root", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            await _viewModel.RemoveSourceRootAsync(node);
+        }
         private async void Generate_Click(object sender, RoutedEventArgs e) => await _viewModel.GenerateAsync();
         private async void OpenReturned_Click(object sender, RoutedEventArgs e) { var dialog = new OpenFileDialog { Filter = "ZIP archives (*.zip)|*.zip" }; if (dialog.ShowDialog(this) == true) await _viewModel.LoadReturnedAsync(dialog.FileName); }
         private async void Apply_Click(object sender, RoutedEventArgs e) { if (_viewModel.Changes.Any(x => x.Apply && x.Change.Kind == Models.ChangeKind.LocalFileChanged) && MessageBox.Show(this, "One or more local files changed after export. Overwrite them?", "Confirm overwrite", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return; await _viewModel.ApplyAsync(); }

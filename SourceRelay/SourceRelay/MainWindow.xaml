@@ -22,17 +22,16 @@
             <Grid.ColumnDefinitions><ColumnDefinition Width="2*" MinWidth="330"/><ColumnDefinition Width="3*" MinWidth="440"/><ColumnDefinition Width="1.5*" MinWidth="260"/></Grid.ColumnDefinitions>
             <Grid Grid.Column="0">
               <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="3*"/><RowDefinition Height="2*"/></Grid.RowDefinitions>
-              <GroupBox Header="Add source path" Grid.Row="0">
-                <DockPanel>
-                  <Button DockPanel.Dock="Right" Content="Add" Click="AddSourcePath_Click"/>
-                  <TextBox x:Name="SourcePathBox" Text="{Binding SourcePath, UpdateSourceTrigger=PropertyChanged}" Padding="7" Margin="3" KeyDown="SourcePath_KeyDown" ToolTip="Paste full file or directory path…"/>
-                </DockPanel>
+              <GroupBox Header="Add source file or folder" Grid.Row="0">
+                <StackPanel>
+                  <DockPanel><Button DockPanel.Dock="Right" Content="Add" Click="AddSourcePath_Click"/><TextBox x:Name="SourcePathBox" Text="{Binding SourcePath, UpdateSourceTrigger=PropertyChanged}" Padding="7" Margin="3" KeyDown="SourcePath_KeyDown" ToolTip="Paste an absolute file or directory path…"/></DockPanel>
+                  <Button Content="Add Source Folder…" Click="ChooseFolder_Click" HorizontalAlignment="Left"/>
+                </StackPanel>
               </GroupBox>
-              <GroupBox Header="Project tree" Grid.Row="1">
+              <GroupBox Header="Sources" Grid.Row="1">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Top">
-                        <Button Content="Choose Project Folder…" Click="ChooseFolder_Click" HorizontalAlignment="Left"/>
-                        <TextBlock Text="{Binding ProjectRoot}" Margin="4" TextWrapping="Wrap" Foreground="#445"/>
+                        <Button Content="Remove Selected Source Root" Click="RemoveSourceRoot_Click" HorizontalAlignment="Left"/>
                         <TextBox Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Margin="4" Padding="7" ToolTip="Search relative paths"/>
                     </StackPanel>
                     <TreeView x:Name="ProjectTree" ItemsSource="{Binding ProjectFiles}" BorderThickness="0">

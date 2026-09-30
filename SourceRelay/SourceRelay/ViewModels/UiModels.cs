@@ -20,11 +20,14 @@ public sealed class FileNode : Bindable
     public string Name { get; init; } = "";
     public string FullPath { get; init; } = "";
     public string RelativePath { get; init; } = "";
+    public string SourceRootId { get; init; } = "";
+    public string SourceRootPath { get; init; } = "";
+    public bool IsSourceRoot { get; init; }
     public bool IsDirectory { get; init; }
     public FileNode? Parent { get; init; }
     public SourceSelectionService? Selection { get; init; }
     public ObservableCollection<FileNode> Children { get; } = [];
-    public bool? Included { get => IsDirectory ? _included : Selection?.Contains(FullPath) ?? _included; set { if (_updating || !value.HasValue) return; if (IsDirectory) { LoadChildren(); _updating = true; foreach (var file in Descendants().Where(x => !x.IsDirectory)) file.Included = value; _updating = false; Recalculate(); } else { if (value.Value) Selection?.AddFile(FullPath, Mode); else Selection?.Remove(FullPath); Changed(); Parent?.Recalculate(); } } }
+    public bool? Included { get => IsDirectory ? _included : Selection?.Contains(FullPath) ?? _included; set { if (_updating || !value.HasValue) return; if (IsDirectory) { LoadChildren(); _updating = true; foreach (var file in Descendants().Where(x => !x.IsDirectory)) file.Included = value; _updating = false; Recalculate(); } else { if (value.Value) Selection?.AddFile(SourceRootId, FullPath, Mode); else Selection?.Remove(FullPath); Changed(); Parent?.Recalculate(); } } }
     public FileMode Mode { get => Selection?.Find(FullPath)?.Mode ?? _mode; set { _mode = value; var item = Selection?.Find(FullPath); if (item is not null) item.Mode = value; Changed(); } }
     public bool IsSelected { get => _selected; set => Set(ref _selected, value); }
     public bool IsExpanded { get => _expanded; set { if (Set(ref _expanded, value) && value) LoadChildren(); } }
@@ -39,7 +42,7 @@ public sealed class ChangeItem : Bindable
 {
     private bool _apply;
     public required ReturnedChange Change { get; init; }
-    public string Path => Change.Path; public string Classification => Change.Kind.ToString(); public string Message => Change.Message;
+    public string Path => Change.DisplayPath; public string Classification => Change.Kind.ToString(); public string Message => Change.Message;
     public bool Apply { get => _apply; set { if (Set(ref _apply, value)) Change.Apply = value; } }
     public bool CanApply => Change.CanApply;
 }

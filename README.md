@@ -8,16 +8,17 @@ SourceRelay is a local Windows/WPF utility for handing a deliberately limited se
 
 ## Workflow
 
-1. Choose the Unity/game project root and expand the lazy file tree.
-2. Tick only the files you want to disclose. Included files default to **Editable**; change the per-file selector to **Context** when the file is reference-only.
-3. Select **Generate Bundle**. SourceRelay writes the ZIP outside the source tree and copies this handoff message:
+1. Paste an absolute file or folder path. SourceRelay infers and reuses an appropriate Source Root (Unity `Assets`, nearest solution/project, then a simple parent fallback).
+2. Add paths from as many independent Source Roots as the task needs and expand their lazy trees.
+3. Tick only the files you want to disclose. Included files default to **Editable**; change the per-file selector to **Context** when the file is reference-only.
+4. Select **Generate Bundle**. SourceRelay writes the ZIP outside the source tree and copies this handoff message:
 
    `Apply the changes we agreed above to the attached SourceRelay bundle. Follow INSTRUCTIONS.md for the bundle and return format.`
 
-4. Drag the ZIP into the existing conversation, press Ctrl+V, and send. The conversation—not SourceRelay—defines the coding task.
-5. Drag the returned ZIP onto SourceRelay, open it with **Open Returned Bundle**, or let the passive Downloads watcher recognise it.
-6. Review classifications and the simple line comparison. Explicitly tick and apply valid changes. Nothing is ever auto-applied.
-7. Use the persistent multi-level **Undo** and **Redo** history if needed.
+5. Drag the ZIP into the existing conversation, press Ctrl+V, and send. The conversation—not SourceRelay—defines the coding task.
+6. Drag the returned ZIP onto SourceRelay, open it with **Open Returned Bundle**, or let the passive Downloads watcher recognise it.
+7. Review classifications and the simple line comparison. Explicitly tick and apply valid changes. Nothing is ever auto-applied.
+8. Use the persistent multi-level **Undo** and **Redo** history if needed.
 
 ## Bundle protocol
 
@@ -26,14 +27,17 @@ SourceRelay_<bundle-id>.zip
 ├── INSTRUCTIONS.md
 ├── manifest.json
 └── files/
-    └── <original relative paths>
+    ├── <root-id>/
+    │   └── <root-relative paths>
+    └── <another-root-id>/
+        └── <root-relative paths>
 ```
 
-The versioned manifest contains the bundle ID, project display name, relative paths, editable/context mode, byte size, and original SHA-256. It never contains the absolute project path. A private per-user record maps that ID back to the project root. There is deliberately no `TASK.md`; task intent stays in the conversation.
+The v2 manifest contains the bundle ID, non-sensitive Source Root IDs/display names, root-relative paths, editable/context mode, byte size, and original SHA-256. It never contains absolute local paths. A private per-user record maps each bundle/root ID pair back to its local Source Root. There is deliberately no `TASK.md`; task intent stays in the conversation.
 
 ## Validation and safety
 
-Returned archives are treated as untrusted. SourceRelay checks format/version and known bundle identity; exact manifest identity; entry and expanded-size limits; absolute and traversal paths; duplicate and case-colliding paths; unexpected, missing, and context-only changes; and containment beneath the recorded project root. It reads entries individually and never extracts an archive into the project.
+Returned archives are treated as untrusted. SourceRelay checks format/version and known bundle identity; exact manifest identity; entry and expanded-size limits; absolute and traversal paths; duplicate and case-colliding paths; unexpected roots/files, missing files, and context-only changes; and containment beneath each locally recorded Source Root. It reads entries individually and never extracts an archive into a source tree.
 
 Every returned hash is compared with both the export hash and current local file. If the local file changed after export, SourceRelay requires explicit overwrite confirmation. Read-only destinations are rejected with guidance to check the file out in Perforce; SourceRelay neither invokes `p4` nor changes the read-only flag. Writes use a sibling temporary file followed by replacement.
 

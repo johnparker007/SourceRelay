@@ -30,7 +30,7 @@ public static class SafePath
         relative = NormalizeRelative(relative);
         var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var full = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
-        if (!full.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Path escapes project root.");
+        if (!full.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Path escapes Source Root.");
         return full;
     }
 }
@@ -51,7 +51,11 @@ public sealed class BundleRecordStore
     public Task<BundleRecord?> FindAsync(Guid id) => JsonStore.ReadAsync<BundleRecord>(Path.Combine(_folder, id + ".json"));
 }
 
-public sealed record SelectedFile(string FullPath, string RelativePath, FileMode Mode);
+public sealed record SelectedFile(string SourceRootId, string FullPath, string RelativePath, FileMode Mode)
+{
+    public SelectedFile(string fullPath, string relativePath, FileMode mode) : this("", fullPath, relativePath, mode) { }
+}
+public sealed record BundleSourceRoot(string Id, string AbsolutePath, string DisplayName);
 public sealed record BundleResult(BundleRecord Record, string ZipPath);
 
 public sealed class BundleService(BundleRecordStore records)
@@ -62,21 +66,21 @@ public sealed class BundleService(BundleRecordStore records)
         "This archive was created by SourceRelay.\n\n" +
         "The user's conversation describes the coding task. These instructions describe how this archive must be handled.\n\n" +
         "## Files\n\n" +
-        "Files are under `files/`.\n\n" +
-        "The manifest records each file as either:\n\n" +
-        "- `editable`\n" +
-        "- `context`\n\n" +
+        "Source files are stored under:\n\n" +
+        "`files/<rootId>/<relative path>`\n\n" +
+        "The manifest defines each Source Root and every allowed file.\n\n" +
         "Only files whose manifest entry has `\"mode\": \"editable\"` may be modified.\n\n" +
         "Files whose manifest entry has `\"mode\": \"context\"` are reference-only and must be returned byte-for-byte unchanged.\n\n" +
         "## Rules\n\n" +
         "1. Do not rename files.\n" +
         "2. Do not move files.\n" +
-        "3. Do not modify context-only files.\n" +
-        "4. Do not create additional source files.\n" +
-        "5. Preserve all relative paths exactly.\n" +
-        "6. Do not modify `manifest.json`.\n" +
-        "7. If the requested change requires another source file that is not in the bundle, ask the user to provide it rather than inventing its contents.\n" +
-        "8. Do not remove any files from the bundle.\n\n" +
+        "3. Do not move files between Source Roots.\n" +
+        "4. Do not modify context-only files.\n" +
+        "5. Do not create additional source files.\n" +
+        "6. Preserve root IDs and relative paths exactly.\n" +
+        "7. Do not modify `manifest.json`.\n" +
+        "8. If the requested task requires another source file that is not included, ask the user to provide it.\n" +
+        "9. Do not remove files from the bundle.\n\n" +
         "## Return format\n\n" +
         "When finished, return a ZIP containing:\n\n" +
         "- the original `manifest.json`, unchanged\n" +
@@ -86,21 +90,27 @@ public sealed class BundleService(BundleRecordStore records)
         "Do not include `INSTRUCTIONS.md` in the returned ZIP.\n\n" +
         "The returned archive must preserve the original SourceRelay bundle ID and all relative file paths so SourceRelay can validate it.\n";
 
-    public async Task<BundleResult> CreateAsync(string projectRoot, IEnumerable<SelectedFile> selection, string outputFolder, CancellationToken ct = default)
+    public async Task<BundleResult> CreateAsync(IEnumerable<BundleSourceRoot> sourceRoots, IEnumerable<SelectedFile> selection, string outputFolder, CancellationToken ct = default)
     {
-        var files = selection.ToList();
+        var files = selection.ToList(); var roots = sourceRoots.ToList();
         if (files.Count == 0) throw new InvalidOperationException("Select at least one file.");
-        var manifest = new BundleManifest { BundleId = Guid.NewGuid(), CreatedUtc = DateTime.UtcNow, ProjectName = new DirectoryInfo(projectRoot).Name };
+        var usedIds = files.Select(x => x.SourceRootId).Distinct(StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        roots = roots.Where(x => usedIds.Contains(x.Id)).ToList();
+        if (roots.Count != usedIds.Count || roots.Select(x => x.Id).Distinct(StringComparer.Ordinal).Count() != roots.Count) throw new InvalidOperationException("Selection references an invalid Source Root.");
+        if (roots.Any(x => SafePath.NormalizeRelative(x.Id) != x.Id || x.Id.Contains('/'))) throw new InvalidOperationException("Source Root IDs must be safe single path segments.");
+        var manifest = new BundleManifest { FormatVersion = 2, BundleId = Guid.NewGuid(), CreatedUtc = DateTime.UtcNow,
+            Roots = roots.Select(x => new BundleRoot { Id = x.Id, DisplayName = x.DisplayName }).ToList() };
         foreach (var selected in files)
         {
             ct.ThrowIfCancellationRequested();
+            var root = roots.Single(x => x.Id == selected.SourceRootId);
             var relative = SafePath.NormalizeRelative(selected.RelativePath);
-            var expected = SafePath.UnderRoot(projectRoot, relative);
+            var expected = SafePath.UnderRoot(root.AbsolutePath, relative);
             if (!string.Equals(Path.GetFullPath(selected.FullPath), expected, StringComparison.OrdinalIgnoreCase) || !File.Exists(expected)) throw new InvalidOperationException($"Invalid selection: {relative}");
             var info = new FileInfo(expected);
-            manifest.Files.Add(new() { Path = relative, Mode = selected.Mode, Size = info.Length, Sha256 = await HashService.FileAsync(expected, ct) });
+            manifest.Files.Add(new() { RootId = root.Id, Path = relative, Mode = selected.Mode, Size = info.Length, Sha256 = await HashService.FileAsync(expected, ct) });
         }
-        if (manifest.Files.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != manifest.Files.Count) throw new InvalidOperationException("Selection contains duplicate paths.");
+        if (manifest.Files.Select(x => x.RootId + "\0" + x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != manifest.Files.Count) throw new InvalidOperationException("Selection contains duplicate paths within a Source Root.");
         Directory.CreateDirectory(outputFolder);
         var zipPath = Path.Combine(outputFolder, $"SourceRelay_{manifest.BundleId}.zip");
         try
@@ -109,13 +119,20 @@ public sealed class BundleService(BundleRecordStore records)
             {
                 WriteText(zip, "INSTRUCTIONS.md", Instructions);
                 WriteText(zip, "manifest.json", System.Text.Json.JsonSerializer.Serialize(manifest, JsonStore.Options));
-                foreach (var file in manifest.Files) zip.CreateEntryFromFile(SafePath.UnderRoot(projectRoot, file.Path), "files/" + file.Path, CompressionLevel.Optimal);
+                foreach (var file in manifest.Files) { var root = roots.Single(x => x.Id == file.RootId); zip.CreateEntryFromFile(SafePath.UnderRoot(root.AbsolutePath, file.Path), $"files/{file.RootId}/{file.Path}", CompressionLevel.Optimal); }
             }
-            var record = new BundleRecord { Manifest = manifest, ProjectRoot = Path.GetFullPath(projectRoot), ArchivePath = zipPath };
+            var record = new BundleRecord { Manifest = manifest, Roots = roots.Select(x => new LocalBundleRoot { Id = x.Id, AbsolutePath = Path.GetFullPath(x.AbsolutePath) }).ToList(), ArchivePath = zipPath };
             await records.SaveAsync(record);
             return new(record, zipPath);
         }
         catch { if (File.Exists(zipPath)) File.Delete(zipPath); throw; }
+    }
+
+    // Source-compatible convenience for integrations which previously supplied one root.
+    public Task<BundleResult> CreateAsync(string root, IEnumerable<SelectedFile> selection, string outputFolder, CancellationToken ct = default)
+    {
+        const string id = "root";
+        return CreateAsync([new(id, root, new DirectoryInfo(root).Name)], selection.Select(x => x with { SourceRootId = string.IsNullOrEmpty(x.SourceRootId) ? id : x.SourceRootId }), outputFolder, ct);
     }
 
     private static void WriteText(ZipArchive zip, string name, string text)

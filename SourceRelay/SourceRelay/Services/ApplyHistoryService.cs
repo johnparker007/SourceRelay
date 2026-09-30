@@ -20,7 +20,8 @@ public sealed class ApplyHistoryService
         if (!bundle.IsValid || selected.Count == 0) return new(false, false, "No valid changes selected.");
         foreach (var change in selected)
         {
-            var destination = SafePath.UnderRoot(bundle.Record.ProjectRoot, change.Path);
+            var root = bundle.Record.RootPath(change.RootId); if (string.IsNullOrEmpty(root)) return new(false, false, $"Source Root is not mapped: {change.RootId}");
+            var destination = SafePath.UnderRoot(root, change.Path);
             if (!File.Exists(destination)) return new(false, false, $"Destination is missing: {change.Path}");
             if ((File.GetAttributes(destination) & FileAttributes.ReadOnly) != 0) return new(false, false, $"{change.Path} is read-only. Check it out in Perforce before applying.");
         }
@@ -30,8 +31,8 @@ public sealed class ApplyHistoryService
         {
             foreach (var change in selected)
             {
-                var destination = SafePath.UnderRoot(entry.ProjectRoot, change.Path); var before = await File.ReadAllBytesAsync(destination); var after = change.ReturnedBytes!;
-                var item = new HistoryFile { RelativePath = change.Path, BeforeFile = Path.Combine(folder, entry.Files.Count + ".before"), AfterFile = Path.Combine(folder, entry.Files.Count + ".after"), BeforeHash = HashService.Bytes(before), AfterHash = HashService.Bytes(after) };
+                var absoluteRoot = bundle.Record.RootPath(change.RootId)!; var destination = SafePath.UnderRoot(absoluteRoot, change.Path); var before = await File.ReadAllBytesAsync(destination); var after = change.ReturnedBytes!;
+                var item = new HistoryFile { RootId = change.RootId, AbsoluteRoot = absoluteRoot, RelativePath = change.Path, BeforeFile = Path.Combine(folder, entry.Files.Count + ".before"), AfterFile = Path.Combine(folder, entry.Files.Count + ".after"), BeforeHash = HashService.Bytes(before), AfterHash = HashService.Bytes(after) };
                 await File.WriteAllBytesAsync(item.BeforeFile, before); await File.WriteAllBytesAsync(item.AfterFile, after); await ReplaceAsync(destination, after); entry.Files.Add(item);
             }
             _entries.RemoveAll(x => x.IsUndone); _entries.Add(entry);
@@ -50,13 +51,13 @@ public sealed class ApplyHistoryService
         if (entry is null) return new(false, false, undo ? "Nothing to undo." : "Nothing to redo.");
         foreach (var file in entry.Files)
         {
-            var destination = SafePath.UnderRoot(entry.ProjectRoot, file.RelativePath);
+            var destination = SafePath.UnderRoot(string.IsNullOrEmpty(file.AbsoluteRoot) ? entry.ProjectRoot : file.AbsoluteRoot, file.RelativePath);
             if (!File.Exists(destination)) return new(false, true, $"File is missing: {file.RelativePath}");
             var expected = undo ? file.AfterHash : file.BeforeHash;
             if (!string.Equals(await HashService.FileAsync(destination), expected, StringComparison.OrdinalIgnoreCase) && !overwrite) return new(false, true, $"{file.RelativePath} changed externally. Confirm overwrite to continue.");
             if ((File.GetAttributes(destination) & FileAttributes.ReadOnly) != 0) return new(false, false, $"{file.RelativePath} is read-only.");
         }
-        foreach (var file in entry.Files) await ReplaceAsync(SafePath.UnderRoot(entry.ProjectRoot, file.RelativePath), await File.ReadAllBytesAsync(undo ? file.BeforeFile : file.AfterFile));
+        foreach (var file in entry.Files) await ReplaceAsync(SafePath.UnderRoot(string.IsNullOrEmpty(file.AbsoluteRoot) ? entry.ProjectRoot : file.AbsoluteRoot, file.RelativePath), await File.ReadAllBytesAsync(undo ? file.BeforeFile : file.AfterFile));
         entry.IsUndone = undo; await JsonStore.WriteAtomicAsync(_index, _entries);
         return new(true, false, $"{(undo ? "Undo" : "Redo")} completed.", entry.Files.Count);
     }

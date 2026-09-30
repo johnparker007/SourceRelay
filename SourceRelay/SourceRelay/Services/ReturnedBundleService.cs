@@ -28,32 +28,37 @@ public sealed class ReturnedBundleService(BundleRecordStore records)
             if (manifests.Count != 1) return Error(result, "A single manifest.json is required.");
             var manifestBytes = await ReadLimitedAsync(manifests[0], ct);
             var manifest = JsonSerializer.Deserialize<BundleManifest>(manifestBytes, JsonStore.Options) ?? throw new InvalidDataException("Manifest is empty.");
-            if (manifest.Format != "SourceRelay" || manifest.FormatVersion != 1 || manifest.BundleId == Guid.Empty) return Error(result, "Unsupported SourceRelay manifest.");
+            if (manifest.Format != "SourceRelay" || manifest.FormatVersion is not (1 or 2) || manifest.BundleId == Guid.Empty) return Error(result, "Unsupported SourceRelay manifest.");
             result.BundleId = manifest.BundleId;
             result.Record = await records.FindAsync(manifest.BundleId) ?? new();
-            if (string.IsNullOrEmpty(result.Record.ProjectRoot)) return Error(result, "Bundle ID is not recognised on this computer.");
+            if (result.Record.Manifest.BundleId == Guid.Empty || (manifest.FormatVersion == 1 ? string.IsNullOrEmpty(result.Record.ProjectRoot) : result.Record.Roots.Count == 0)) return Error(result, "Bundle ID is not recognised on this computer.");
             if (!ManifestMatches(manifest, result.Record.Manifest)) return Error(result, "Returned manifest does not match the original bundle.");
             var originalManifestBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(result.Record.Manifest, JsonStore.Options));
             if (!manifestBytes.SequenceEqual(originalManifestBytes)) return Error(result, "Returned manifest.json is not byte-for-byte unchanged.");
-            var expected = result.Record.Manifest.Files.ToDictionary(x => x.Path, StringComparer.OrdinalIgnoreCase);
+            var expected = result.Record.Manifest.Files.ToDictionary(x => Key(x.RootId, x.Path), StringComparer.OrdinalIgnoreCase);
             var returnedEntries = zip.Entries.Where(x => x.FullName.Replace('\\', '/').StartsWith("files/", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(x.Name)).ToList();
             foreach (var entry in returnedEntries)
             {
-                var relative = SafePath.NormalizeRelative(entry.FullName.Replace('\\', '/')[6..]);
-                if (!expected.TryGetValue(relative, out var original)) { result.Changes.Add(new() { Path = relative, Kind = ChangeKind.Unexpected, Message = "File was not in the original bundle." }); continue; }
-                if (!string.Equals(relative, original.Path, StringComparison.Ordinal)) { result.Changes.Add(new() { Path = relative, Kind = ChangeKind.Unexpected, Message = "File path casing does not match the original bundle." }); continue; }
+                var archiveRelative = SafePath.NormalizeRelative(entry.FullName.Replace('\\', '/')[6..]);
+                var slash = archiveRelative.IndexOf('/');
+                var rootId = manifest.FormatVersion == 1 ? "" : slash > 0 ? archiveRelative[..slash] : "";
+                var relative = manifest.FormatVersion == 1 ? archiveRelative : slash > 0 ? SafePath.NormalizeRelative(archiveRelative[(slash + 1)..]) : "";
+                if (manifest.FormatVersion == 2 && !manifest.Roots.Any(x => x.Id == rootId)) { result.Changes.Add(new() { RootId = rootId, Path = relative, Kind = ChangeKind.Unexpected, Message = "Unknown Source Root ID." }); continue; }
+                if (!expected.TryGetValue(Key(rootId, relative), out var original)) { result.Changes.Add(new() { RootId = rootId, Path = relative, Kind = ChangeKind.Unexpected, Message = "File was not in the original bundle at this Source Root." }); continue; }
+                if (!string.Equals(relative, original.Path, StringComparison.Ordinal) || !string.Equals(rootId, original.RootId, StringComparison.Ordinal)) { result.Changes.Add(new() { RootId = rootId, Path = relative, Kind = ChangeKind.Unexpected, Message = "File path casing does not match the original bundle." }); continue; }
                 var bytes = await ReadLimitedAsync(entry, ct);
                 var returnedHash = HashService.Bytes(bytes);
-                var localPath = SafePath.UnderRoot(result.Record.ProjectRoot, relative);
+                var localRoot = result.Record.RootPath(rootId); if (string.IsNullOrEmpty(localRoot)) { result.Changes.Add(new() { RootId = rootId, Path = relative, Kind = ChangeKind.Unexpected, Message = "Source Root is not mapped locally." }); continue; }
+                var localPath = SafePath.UnderRoot(localRoot, relative);
                 var localBytes = File.Exists(localPath) ? await File.ReadAllBytesAsync(localPath, ct) : [];
                 var localHash = HashService.Bytes(localBytes);
                 var kind = returnedHash == original.Sha256 ? ChangeKind.Unchanged
                     : original.Mode == Models.FileMode.Context ? ChangeKind.ContextOnlyModified
                     : localHash != original.Sha256 ? ChangeKind.LocalFileChanged : ChangeKind.Modified;
-                result.Changes.Add(new() { Path = original.Path, Kind = kind, ReturnedBytes = bytes, Apply = kind == ChangeKind.Modified, Diff = DiffService.Create(localBytes, bytes), Message = Describe(kind) });
+                result.Changes.Add(new() { RootId = original.RootId, Path = original.Path, Kind = kind, ReturnedBytes = bytes, Apply = kind == ChangeKind.Modified, Diff = DiffService.Create(localBytes, bytes), Message = Describe(kind) });
             }
-            foreach (var missing in expected.Values.Where(x => !returnedEntries.Any(e => string.Equals(e.FullName.Replace('\\', '/'), "files/" + x.Path, StringComparison.Ordinal))))
-                result.Changes.Add(new() { Path = missing.Path, Kind = ChangeKind.Missing, Message = "File is missing from the returned bundle." });
+            foreach (var missing in expected.Values.Where(x => !returnedEntries.Any(e => string.Equals(e.FullName.Replace('\\', '/'), manifest.FormatVersion == 1 ? "files/" + x.Path : $"files/{x.RootId}/{x.Path}", StringComparison.Ordinal))))
+                result.Changes.Add(new() { RootId = missing.RootId, Path = missing.Path, Kind = ChangeKind.Missing, Message = "File is missing from the returned bundle." });
             if (result.Changes.Any(x => x.Kind is ChangeKind.Unexpected or ChangeKind.ContextOnlyModified or ChangeKind.Missing)) result.Errors.Add("Returned bundle contains prohibited or missing files.");
             result.Record.State = BundleState.Reviewed;
             await records.SaveAsync(result.Record);
@@ -63,8 +68,10 @@ public sealed class ReturnedBundleService(BundleRecordStore records)
         return result;
     }
 
+    private static string Key(string rootId, string path) => rootId + "\0" + path;
     private static bool ManifestMatches(BundleManifest a, BundleManifest b) => a.BundleId == b.BundleId && a.Format == b.Format && a.FormatVersion == b.FormatVersion &&
-        a.Files.Count == b.Files.Count && a.Files.All(x => b.Files.Any(y => string.Equals(x.Path, y.Path, StringComparison.Ordinal) && x.Mode == y.Mode && x.Sha256 == y.Sha256 && x.Size == y.Size));
+        a.Roots.Count == b.Roots.Count && a.Roots.All(x => b.Roots.Any(y => x.Id == y.Id && x.DisplayName == y.DisplayName)) &&
+        a.Files.Count == b.Files.Count && a.Files.All(x => b.Files.Any(y => x.RootId == y.RootId && string.Equals(x.Path, y.Path, StringComparison.Ordinal) && x.Mode == y.Mode && x.Sha256 == y.Sha256 && x.Size == y.Size));
     private static ReturnedBundle Error(ReturnedBundle value, string error) { value.Errors.Add(error); return value; }
     private static string Describe(ChangeKind kind) => kind switch { ChangeKind.Modified => "Ready to apply.", ChangeKind.Unchanged => "Unchanged.", ChangeKind.LocalFileChanged => "Local file changed since export; confirmation is required.", ChangeKind.ContextOnlyModified => "Context-only files cannot be modified.", _ => kind.ToString() };
     private static async Task<byte[]> ReadLimitedAsync(ZipArchiveEntry entry, CancellationToken ct)
