@@ -48,7 +48,25 @@ public sealed class BundleRecord
     public string ProjectRoot { get; set; } = "";
     public BundleState State { get; set; } = BundleState.AwaitingReturn;
     public string? ArchivePath { get; set; }
+    // Local runtime state only. This is deliberately kept outside BundleManifest so
+    // follow-up archives can continue to carry the original manifest byte-for-byte.
+    public List<ExpectedLocalFile> ExpectedLocalFiles { get; set; } = [];
     public string? RootPath(string rootId) => Manifest.FormatVersion == 1 ? ProjectRoot : Roots.FirstOrDefault(x => string.Equals(x.Id, rootId, StringComparison.Ordinal))?.AbsolutePath;
+    public string? ExpectedLocalHash(string rootId, string path) => ExpectedLocalFiles.FirstOrDefault(x =>
+        string.Equals(x.RootId, rootId, StringComparison.Ordinal) && string.Equals(x.Path, path, StringComparison.Ordinal))?.Sha256;
+    public void SetExpectedLocalHash(string rootId, string path, string sha256)
+    {
+        var value = ExpectedLocalFiles.FirstOrDefault(x => string.Equals(x.RootId, rootId, StringComparison.Ordinal) && string.Equals(x.Path, path, StringComparison.Ordinal));
+        if (value is null) ExpectedLocalFiles.Add(new() { RootId = rootId, Path = path, Sha256 = sha256 });
+        else value.Sha256 = sha256;
+    }
+}
+
+public sealed class ExpectedLocalFile
+{
+    public string RootId { get; set; } = "";
+    public string Path { get; set; } = "";
+    public string Sha256 { get; set; } = "";
 }
 
 public enum ChangeKind { Modified, Unchanged, LocalFileChanged, Missing, Unexpected, Invalid, ContextOnlyModified, ReadOnly }

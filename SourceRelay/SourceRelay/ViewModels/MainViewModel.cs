@@ -10,7 +10,7 @@ namespace SourceRelay.ViewModels;
 public sealed class MainViewModel : Bindable, IDisposable
 {
     private readonly SettingsService _settingsService = new(); private readonly BundleRecordStore _records = new();
-    private readonly ApplyHistoryService _history = new(); private readonly DownloadsMonitor _monitor = new();
+    private readonly ApplyHistoryService _history; private readonly DownloadsMonitor _monitor = new();
     private AppSettings _settings = new(); private ReturnedBundle? _returned; private ChangeItem? _selectedChange;
     private readonly SourceSelectionService _selection = new();
     private string _status = "Paste an absolute file or folder path to begin.", _lastBundlePath = "", _search = "", _sourcePath = ""; private bool _busy;
@@ -32,6 +32,7 @@ public sealed class MainViewModel : Bindable, IDisposable
 
     public MainViewModel()
     {
+        _history = new ApplyHistoryService(records: _records);
         _selection.Changed += (_, _) => { foreach (var root in ProjectFiles) root.RefreshFromSelection(); Changed(nameof(SelectedFilesHeading)); Changed(nameof(SelectionSummary)); };
         _selection.RootsChanged += (_, _) => RebuildRoots();
     }

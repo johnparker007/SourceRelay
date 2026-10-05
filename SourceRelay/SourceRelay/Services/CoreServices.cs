@@ -14,6 +14,26 @@ public static class HashService
     public static string Bytes(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }
 
+public static class Utf8BomService
+{
+    private static readonly byte[] Bom = [0xef, 0xbb, 0xbf];
+
+    public static bool HasBom(byte[] bytes) => bytes.AsSpan().StartsWith(Bom);
+
+    public static byte[] Preserve(byte[] localBytes, byte[] returnedBytes)
+    {
+        var localHasBom = HasBom(localBytes);
+        var returnedHasBom = HasBom(returnedBytes);
+        if (localHasBom == returnedHasBom) return returnedBytes;
+        if (!localHasBom) return returnedBytes[Bom.Length..];
+
+        var result = new byte[Bom.Length + returnedBytes.Length];
+        Bom.CopyTo(result, 0);
+        returnedBytes.CopyTo(result, Bom.Length);
+        return result;
+    }
+}
+
 public static class SafePath
 {
     public static string NormalizeRelative(string path)
