@@ -46,15 +46,18 @@ public sealed class ReturnedBundleService(BundleRecordStore records)
                 if (manifest.FormatVersion == 2 && !manifest.Roots.Any(x => x.Id == rootId)) { result.Changes.Add(new() { RootId = rootId, Path = relative, Kind = ChangeKind.Unexpected, Message = "Unknown Source Root ID." }); continue; }
                 if (!expected.TryGetValue(Key(rootId, relative), out var original)) { result.Changes.Add(new() { RootId = rootId, Path = relative, Kind = ChangeKind.Unexpected, Message = "File was not in the original bundle at this Source Root." }); continue; }
                 if (!string.Equals(relative, original.Path, StringComparison.Ordinal) || !string.Equals(rootId, original.RootId, StringComparison.Ordinal)) { result.Changes.Add(new() { RootId = rootId, Path = relative, Kind = ChangeKind.Unexpected, Message = "File path casing does not match the original bundle." }); continue; }
-                var bytes = await ReadLimitedAsync(entry, ct);
-                var returnedHash = HashService.Bytes(bytes);
+                var returnedBytes = await ReadLimitedAsync(entry, ct);
                 var localRoot = result.Record.RootPath(rootId); if (string.IsNullOrEmpty(localRoot)) { result.Changes.Add(new() { RootId = rootId, Path = relative, Kind = ChangeKind.Unexpected, Message = "Source Root is not mapped locally." }); continue; }
                 var localPath = SafePath.UnderRoot(localRoot, relative);
                 var localBytes = File.Exists(localPath) ? await File.ReadAllBytesAsync(localPath, ct) : [];
+                var bytes = Utf8BomService.Preserve(localBytes, returnedBytes);
+                var returnedHash = HashService.Bytes(bytes);
                 var localHash = HashService.Bytes(localBytes);
-                var kind = returnedHash == original.Sha256 ? ChangeKind.Unchanged
-                    : original.Mode == Models.FileMode.Context ? ChangeKind.ContextOnlyModified
-                    : localHash != original.Sha256 ? ChangeKind.LocalFileChanged : ChangeKind.Modified;
+                var expectedLocalHash = result.Record.ExpectedLocalHash(original.RootId, original.Path) ?? original.Sha256;
+                var kind = original.Mode == Models.FileMode.Context
+                    ? returnedHash == original.Sha256 ? ChangeKind.Unchanged : ChangeKind.ContextOnlyModified
+                    : localHash != expectedLocalHash ? ChangeKind.LocalFileChanged
+                    : returnedHash == expectedLocalHash ? ChangeKind.Unchanged : ChangeKind.Modified;
                 result.Changes.Add(new() { RootId = original.RootId, Path = original.Path, Kind = kind, ReturnedBytes = bytes, Apply = kind == ChangeKind.Modified, Diff = DiffService.Create(localBytes, bytes), Message = Describe(kind) });
             }
             foreach (var missing in expected.Values.Where(x => !returnedEntries.Any(e => string.Equals(e.FullName.Replace('\\', '/'), manifest.FormatVersion == 1 ? "files/" + x.Path : $"files/{x.RootId}/{x.Path}", StringComparison.Ordinal))))
