@@ -52,9 +52,11 @@ public sealed class ReturnedBundleService(BundleRecordStore records)
                 var localPath = SafePath.UnderRoot(localRoot, relative);
                 var localBytes = File.Exists(localPath) ? await File.ReadAllBytesAsync(localPath, ct) : [];
                 var localHash = HashService.Bytes(localBytes);
-                var kind = returnedHash == original.Sha256 ? ChangeKind.Unchanged
-                    : original.Mode == Models.FileMode.Context ? ChangeKind.ContextOnlyModified
-                    : localHash != original.Sha256 ? ChangeKind.LocalFileChanged : ChangeKind.Modified;
+                var expectedLocalHash = result.Record.ExpectedLocalHash(original.RootId, original.Path) ?? original.Sha256;
+                var kind = original.Mode == Models.FileMode.Context
+                    ? returnedHash == original.Sha256 ? ChangeKind.Unchanged : ChangeKind.ContextOnlyModified
+                    : returnedHash == expectedLocalHash ? ChangeKind.Unchanged
+                    : localHash == expectedLocalHash ? ChangeKind.Modified : ChangeKind.LocalFileChanged;
                 result.Changes.Add(new() { RootId = original.RootId, Path = original.Path, Kind = kind, ReturnedBytes = bytes, Apply = kind == ChangeKind.Modified, Diff = DiffService.Create(localBytes, bytes), Message = Describe(kind) });
             }
             foreach (var missing in expected.Values.Where(x => !returnedEntries.Any(e => string.Equals(e.FullName.Replace('\\', '/'), manifest.FormatVersion == 1 ? "files/" + x.Path : $"files/{x.RootId}/{x.Path}", StringComparison.Ordinal))))

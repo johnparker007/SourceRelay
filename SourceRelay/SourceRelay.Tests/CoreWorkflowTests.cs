@@ -52,6 +52,82 @@ public sealed class CoreWorkflowTests : IDisposable
         Write("a.cs", "local edit"); var conflict = await new ReturnedBundleService(_records).ValidateAsync(zip); Assert.Equal(ChangeKind.LocalFileChanged, conflict.Changes.Single().Kind);
     }
 
+    [Fact] public async Task FollowUpModificationToPreviouslyAppliedFileIsDetectedAndApplied()
+    {
+        var (_, originalZip) = await CreateAsync(FileMode.Editable);
+        var firstZip = ReturnedCopy(originalZip, "first.zip", "files/root/a.cs", "B");
+        var validator = new ReturnedBundleService(_records);
+        var first = await validator.ValidateAsync(firstZip);
+        var firstChange = Assert.Single(first.Changes);
+        Assert.Equal(ChangeKind.Modified, firstChange.Kind);
+        Assert.True(firstChange.Apply);
+
+        var history = new ApplyHistoryService(Path.Combine(_temp, "follow-up-history"), _records);
+        await history.LoadAsync();
+        Assert.True((await history.ApplyAsync(first, first.Changes)).Success);
+        Assert.Equal("B", File.ReadAllText(Path.Combine(_project, "a.cs")));
+
+        var secondZip = ReturnedCopy(originalZip, "second.zip", "files/root/a.cs", "C");
+        var second = await validator.ValidateAsync(secondZip);
+        var secondChange = Assert.Single(second.Changes);
+        Assert.Equal(ChangeKind.Modified, secondChange.Kind);
+        Assert.NotEqual(ChangeKind.LocalFileChanged, secondChange.Kind);
+        Assert.True(secondChange.Apply);
+        Assert.True((await history.ApplyAsync(second, second.Changes)).Success);
+        Assert.Equal("C", File.ReadAllText(Path.Combine(_project, "a.cs")));
+    }
+
+    [Fact] public async Task PreviouslyAppliedContentReturnedAgainIsUnchangedAfterServicesReload()
+    {
+        var (_, originalZip) = await CreateAsync(FileMode.Editable);
+        var firstZip = ReturnedCopy(originalZip, "reload-first.zip", "files/root/a.cs", "B");
+        var first = await new ReturnedBundleService(_records).ValidateAsync(firstZip);
+        var historyRoot = Path.Combine(_temp, "reload-history");
+        var history = new ApplyHistoryService(historyRoot, _records); await history.LoadAsync();
+        Assert.True((await history.ApplyAsync(first, first.Changes)).Success);
+
+        var reloadedRecords = new BundleRecordStore(Path.Combine(_temp, "records"));
+        var reloadedHistory = new ApplyHistoryService(historyRoot, reloadedRecords); await reloadedHistory.LoadAsync();
+        var repeatedZip = ReturnedCopy(originalZip, "repeated.zip", "files/root/a.cs", "B");
+        var repeated = await new ReturnedBundleService(reloadedRecords).ValidateAsync(repeatedZip);
+        Assert.Equal(ChangeKind.Unchanged, Assert.Single(repeated.Changes).Kind);
+    }
+
+    [Fact] public async Task ExternalEditAfterApplyStillCausesConflict()
+    {
+        var (_, originalZip) = await CreateAsync(FileMode.Editable);
+        var firstZip = ReturnedCopy(originalZip, "external-first.zip", "files/root/a.cs", "B");
+        var first = await new ReturnedBundleService(_records).ValidateAsync(firstZip);
+        var history = new ApplyHistoryService(Path.Combine(_temp, "external-history"), _records); await history.LoadAsync();
+        Assert.True((await history.ApplyAsync(first, first.Changes)).Success);
+        Write("a.cs", "X");
+
+        var nextZip = ReturnedCopy(originalZip, "external-next.zip", "files/root/a.cs", "C");
+        var next = await new ReturnedBundleService(_records).ValidateAsync(nextZip);
+        var change = Assert.Single(next.Changes);
+        Assert.Equal(ChangeKind.LocalFileChanged, change.Kind);
+        Assert.False(change.Apply);
+    }
+
+    [Fact] public async Task UndoAndRedoUpdateExpectedLocalContent()
+    {
+        var (_, originalZip) = await CreateAsync(FileMode.Editable);
+        var firstZip = ReturnedCopy(originalZip, "undo-first.zip", "files/root/a.cs", "B");
+        var first = await new ReturnedBundleService(_records).ValidateAsync(firstZip);
+        var history = new ApplyHistoryService(Path.Combine(_temp, "undo-baseline-history"), _records); await history.LoadAsync();
+        Assert.True((await history.ApplyAsync(first, first.Changes)).Success);
+        Assert.True((await history.UndoAsync()).Success);
+
+        var afterUndoZip = ReturnedCopy(originalZip, "after-undo.zip", "files/root/a.cs", "C");
+        var afterUndo = await new ReturnedBundleService(_records).ValidateAsync(afterUndoZip);
+        Assert.Equal(ChangeKind.Modified, Assert.Single(afterUndo.Changes).Kind);
+
+        Assert.True((await history.RedoAsync()).Success);
+        var afterRedoZip = ReturnedCopy(originalZip, "after-redo.zip", "files/root/a.cs", "C");
+        var afterRedo = await new ReturnedBundleService(_records).ValidateAsync(afterRedoZip);
+        Assert.Equal(ChangeKind.Modified, Assert.Single(afterRedo.Changes).Kind);
+    }
+
     [Fact] public async Task RejectsContextModificationAndUnexpectedFile()
     {
         var (_, zip) = await CreateAsync(FileMode.Context); Rewrite(zip, "files/root/a.cs", "changed"); Add(zip, "files/extra.cs", "bad"); var result = await new ReturnedBundleService(_records).ValidateAsync(zip);
@@ -102,6 +178,41 @@ public sealed class CoreWorkflowTests : IDisposable
         Assert.Equal("ONE", File.ReadAllText(first)); Assert.Equal("TWO", File.ReadAllText(second));
     }
 
+    [Fact] public async Task AppliedBaselinesForIdenticalMultiRootPathsAreIndependent()
+    {
+        var firstRoot = Directory.CreateDirectory(Path.Combine(_temp, "BaselineA")).FullName;
+        var secondRoot = Directory.CreateDirectory(Path.Combine(_temp, "BaselineB")).FullName;
+        var firstFile = Path.Combine(firstRoot, "same.cs"); var secondFile = Path.Combine(secondRoot, "same.cs");
+        File.WriteAllText(firstFile, "A1"); File.WriteAllText(secondFile, "A2");
+        var made = await new BundleService(_records).CreateAsync(
+            [new("one", firstRoot, "One"), new("two", secondRoot, "Two")],
+            [new("one", firstFile, "same.cs", FileMode.Editable), new("two", secondFile, "same.cs", FileMode.Editable)], Path.Combine(_temp, "baseline-multi"));
+        var firstReturn = ReturnedCopy(made.ZipPath, "baseline-multi-first.zip", ("files/one/same.cs", "B1"), ("files/two/same.cs", "B2"));
+        var returned = await new ReturnedBundleService(_records).ValidateAsync(firstReturn);
+        var history = new ApplyHistoryService(Path.Combine(_temp, "baseline-multi-history"), _records); await history.LoadAsync();
+        Assert.True((await history.ApplyAsync(returned, returned.Changes)).Success);
+
+        File.WriteAllText(secondFile, "external");
+        var followUp = ReturnedCopy(made.ZipPath, "baseline-multi-next.zip", ("files/one/same.cs", "C1"), ("files/two/same.cs", "C2"));
+        var validated = await new ReturnedBundleService(_records).ValidateAsync(followUp);
+        Assert.Equal(ChangeKind.Modified, validated.Changes.Single(x => x.RootId == "one").Kind);
+        Assert.Equal(ChangeKind.LocalFileChanged, validated.Changes.Single(x => x.RootId == "two").Kind);
+    }
+
+    [Fact] public async Task AppliedBaselineDoesNotMakeContextOnlyFileEditable()
+    {
+        var (record, originalZip) = await CreateAsync(FileMode.Context);
+        record.SetExpectedLocalHash("root", "a.cs", HashService.Bytes(Encoding.UTF8.GetBytes("B")));
+        await _records.SaveAsync(record);
+        Write("a.cs", "B");
+        var returnedZip = ReturnedCopy(originalZip, "context-follow-up.zip", "files/root/a.cs", "C");
+        var returned = await new ReturnedBundleService(_records).ValidateAsync(returnedZip);
+        var change = Assert.Single(returned.Changes);
+        Assert.Equal(ChangeKind.ContextOnlyModified, change.Kind);
+        Assert.False(change.Apply);
+        Assert.False(returned.IsValid);
+    }
+
     [Fact] public async Task UnknownRootAndMovingFileBetweenRootsAreRejected()
     {
         var a = Directory.CreateDirectory(Path.Combine(_temp, "A")).FullName; var b = Directory.CreateDirectory(Path.Combine(_temp, "B")).FullName;
@@ -131,4 +242,11 @@ public sealed class CoreWorkflowTests : IDisposable
     private static void Remove(string path, string entry) { using var z = ZipFile.Open(path, ZipArchiveMode.Update); z.GetEntry(entry)!.Delete(); }
     private static void AddEntry(ZipArchive z, string name, string text) { using var w = new StreamWriter(z.CreateEntry(name).Open()); w.Write(text); }
     private static void MakeZip(string path, BundleManifest manifest, params (string, string)[] files) { using var z = ZipFile.Open(path, ZipArchiveMode.Create); AddEntry(z, "manifest.json", JsonSerializer.Serialize(manifest, JsonStore.Options)); foreach (var f in files) AddEntry(z, f.Item1, f.Item2); }
+    private string ReturnedCopy(string original, string name, string entry, string content) => ReturnedCopy(original, name, (entry, content));
+    private string ReturnedCopy(string original, string name, params (string Entry, string Content)[] changes)
+    {
+        var path = Path.Combine(_temp, name); File.Copy(original, path);
+        foreach (var change in changes) Rewrite(path, change.Entry, change.Content);
+        return path;
+    }
 }
